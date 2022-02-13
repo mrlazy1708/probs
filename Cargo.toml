@@ -1,0 +1,18 @@
+[package]
+name = "probs"
+edition = "2021"
+version = "0.1.0"
+authors = ["yihengdu"]
+
+categories = ["algorithms", "science"]
+keywords = ["statistic", "probability", "sample"]
+
+license = "MIT OR Apache-2.0"
+description = "Statistical toolkit"
+repository = "https://github.com/mrlazy1708/probs"
+documentation = "https://docs.rs/probs/latest/probs"
+
+[dependencies]
+tqdm = "^0.3"
+rand = "^0.8"
+nalgebra = "^0.30"
