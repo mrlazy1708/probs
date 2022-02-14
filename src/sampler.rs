@@ -1,11 +1,11 @@
 use super::{domain, domain::*};
 
 pub trait Method<D: Domain>: Default {
-    type Sampler<F: FnMut(&D) -> f64>: Sampler<D>;
+    type Sampler<F: FnMut(&D) -> f64>: Iterator<Item = D>;
     fn sample<F: FnMut(&D) -> f64>(&self, pdf: F) -> Self::Sampler<F>;
 
-    fn gibbs_static<const R: usize>(self) -> multivar::gibbs_static::Method<D, Self, R> {
-        multivar::gibbs_static::Method::<D, Self, R>::default()
+    fn gibbs<const R: usize>(self) -> multivar::gibbs::Method<D, Self, R> {
+        multivar::gibbs::Method::<D, Self, R>::default()
     }
 }
 
@@ -15,24 +15,26 @@ pub trait Sampler<D: Domain>: Iterator<Item = D> {}
 pub mod univar {
     use super::*;
 
+    pub use icdf::Method as Icdf;
+    pub use slice::Method as Slice;
+
     #[doc = "Inverse Transform Sampling."]
     pub mod icdf {
         use super::*;
         use std::marker::PhantomData;
 
-        pub struct Method<D: Domain, const N: usize>(PhantomData<(D,)>);
-        impl<D: Domain, const N: usize> Default for Method<D, N> {
+        pub struct Method<D: FiniteDomain>(PhantomData<(D,)>);
+        impl<D: FiniteDomain> Default for Method<D> {
             fn default() -> Self {
                 Self(PhantomData)
             }
         }
-        impl<D: Domain, const N: usize> super::Method<D> for Method<D, N> {
-            type Sampler<F: FnMut(&D) -> f64> = Sampler<D, N>;
+        impl<D: FiniteDomain> super::Method<D> for Method<D> {
+            type Sampler<F: FnMut(&D) -> f64> = Sampler<D>;
             fn sample<F: FnMut(&D) -> f64>(&self, mut pdf: F) -> Self::Sampler<F> {
                 Sampler {
                     sum: rand::thread_rng(),
-                    cdf: D::random()
-                        .take(1000)
+                    cdf: D::traverse()
                         .map(|x| (x.clone(), pdf(&x)))
                         .scan(0.0, |c, (x, p)| {
                             *c = *c + p;
@@ -43,12 +45,12 @@ pub mod univar {
             }
         }
 
-        pub struct Sampler<D: Domain, const N: usize> {
+        pub struct Sampler<D: FiniteDomain> {
             sum: rand::rngs::ThreadRng,
             cdf: Vec<(D, f64)>,
         }
-        impl<D: Domain, const N: usize> super::Sampler<D> for Sampler<D, N> {}
-        impl<D: Domain, const N: usize> Iterator for Sampler<D, N> {
+        impl<D: FiniteDomain> super::Sampler<D> for Sampler<D> {}
+        impl<D: FiniteDomain> Iterator for Sampler<D> {
             type Item = D;
             fn next(&mut self) -> Option<Self::Item> {
                 let sum = self.cdf.last().unwrap().1;
@@ -77,7 +79,7 @@ pub mod univar {
             #[test]
             fn burst() {
                 use tqdm::Iter;
-                icdf::Method::<X<256>, 1000>::default()
+                icdf::Method::<X<256>>::default()
                     .sample(univar::test::normal::<256>(0.5, 0.2))
                     .take(100000)
                     .tqdm()
@@ -90,7 +92,7 @@ pub mod univar {
                 (0..100000)
                     .tqdm()
                     .map(|_| {
-                        icdf::Method::<X<256>, 1000>::default()
+                        icdf::Method::<X<256>>::default()
                             .sample(univar::test::normal::<256>(0.5, 0.2))
                             .next()
                     })
@@ -104,21 +106,22 @@ pub mod univar {
         use super::*;
         use std::marker::PhantomData;
 
-        pub struct Method<D: Domain>(PhantomData<(D,)>);
-        impl<D: Domain> Default for Method<D> {
+        pub struct Method<D: Domain, const N: usize>(PhantomData<(D,)>);
+        impl<D: Domain, const N: usize> Default for Method<D, N> {
             fn default() -> Self {
                 Self(PhantomData)
             }
         }
-        impl<D: Domain> super::Method<D> for Method<D> {
-            type Sampler<F: FnMut(&D) -> f64> = Sampler<D, F>;
+        impl<D: Domain, const N: usize> super::Method<D> for Method<D, N> {
+            type Sampler<F: FnMut(&D) -> f64> = std::iter::Skip<Sampler<D, F>>;
             fn sample<F: FnMut(&D) -> f64>(&self, pdf: F) -> Self::Sampler<F> {
                 Sampler {
                     aux: rand::thread_rng(),
                     pdf,
 
-                    state: D::random().next(),
+                    state: D::uniform().next(),
                 }
+                .skip(N)
             }
         }
 
@@ -135,12 +138,12 @@ pub mod univar {
                 self.state = self
                     .state
                     .take()
-                    .or_else(|| D::random().next())
+                    .or_else(|| D::uniform().next())
                     .and_then(|x| match (self.pdf)(&x) {
                         y if y > 0.0 && y.is_finite() => {
                             use rand::Rng;
                             let y = self.aux.gen_range(0.0..=y);
-                            D::random().skip_while(|x| (self.pdf)(x) < y).next()
+                            D::uniform().skip_while(|x| (self.pdf)(x) < y).next()
                         }
                         _ => self.next(), // in case of p(x) == 0.0 or NaN
                     });
@@ -157,7 +160,7 @@ pub mod univar {
             #[test]
             fn burst() {
                 use tqdm::Iter;
-                slice::Method::<X<256>>::default()
+                slice::Method::<X<256>, 100>::default()
                     .sample(univar::test::normal::<256>(0.5, 0.2))
                     .take(100000)
                     .tqdm()
@@ -170,7 +173,7 @@ pub mod univar {
                 (0..100000)
                     .tqdm()
                     .map(|_| {
-                        slice::Method::<X<256>>::default()
+                        slice::Method::<X<256>, 100>::default()
                             .sample(univar::test::normal::<256>(0.5, 0.2))
                             .next()
                     })
@@ -179,7 +182,7 @@ pub mod univar {
 
             #[test]
             fn ill_shaped() {
-                slice::Method::<X<256>>::default()
+                slice::Method::<X<256>, 100>::default()
                     .sample(|&X(x)| {
                         if x == 0.0 / 256.0 || x == 255.0 / 256.0 {
                             1.0000
@@ -209,8 +212,10 @@ pub mod univar {
 pub mod multivar {
     use super::*;
 
+    pub use gibbs::Method as Gibbs;
+
     #[doc = "Gibbs Sampling with static dimension."]
-    pub mod gibbs_static {
+    pub mod gibbs {
         use super::*;
         use std::marker::PhantomData;
 
@@ -229,7 +234,7 @@ pub mod multivar {
                     sub: PhantomData,
                     pdf,
 
-                    state: D::random().take(R).collect::<Vec<D>>().try_into().ok(),
+                    state: D::uniform().take(R).collect::<Vec<D>>().try_into().ok(),
                 }
             }
         }
@@ -259,7 +264,7 @@ pub mod multivar {
                                     (self.pdf)(&state)
                                 })
                                 .next()
-                                .or_else(|| D::random().next());
+                                .or_else(|| D::uniform().next());
                             if let Some(new) = new.as_ref() {
                                 state[index] = new.clone();
                             }
@@ -282,8 +287,8 @@ pub mod multivar {
 
             #[test]
             fn dim2() {
-                univar::slice::Method::<X<256>>::default()
-                    .gibbs_static::<2>()
+                univar::slice::Method::<X<256>, 100>::default()
+                    .gibbs::<2>()
                     .sample(multivar::test::normal::<256, 2>(
                         [0.5, 0.5],
                         [[0.01, 0.006], [0.006, 0.02]],
