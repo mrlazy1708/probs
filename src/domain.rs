@@ -1,6 +1,4 @@
-use std::fmt::Debug;
-
-pub trait Domain: Clone + Copy + Debug {
+pub trait Domain: nalgebra::Scalar {
     type Iter: Iterator<Item = Self>;
     fn uniform() -> <Self as Domain>::Iter;
 }
@@ -10,11 +8,16 @@ pub trait FiniteDomain: Domain {
     fn traverse() -> <Self as FiniteDomain>::Iter;
 }
 
-pub mod static_dim {
+pub mod static_dimension {
     use super::*;
 
+    extern crate ndarray as na;
+
     pub struct UniformIter<D: Domain, const R: usize>([<D as Domain>::Iter; R]);
-    impl<D: Domain, const R: usize> Domain for [D; R] {
+    impl<D: Domain, const R: usize> Domain for na::Array<D, na::Dim<[usize; R]>>
+    where
+        na::Dim<[usize; R]>: na::Dimension,
+    {
         type Iter = UniformIter<D, R>;
         fn uniform() -> <Self as Domain>::Iter {
             UniformIter(
@@ -26,14 +29,13 @@ pub mod static_dim {
             )
         }
     }
-    impl<D: Domain, const R: usize> Iterator for UniformIter<D, R> {
-        type Item = [D; R];
+    impl<D: Domain, const R: usize> Iterator for UniformIter<D, R>
+    where
+        na::Dim<[usize; R]>: na::Dimension,
+    {
+        type Item = na::Array<D, na::Dim<[usize; R]>>;
         fn next(&mut self) -> Option<Self::Item> {
-            self.0
-                .iter_mut()
-                .map(|iter| iter.next())
-                .collect::<Option<Vec<_>>>()
-                .and_then(|values| values.try_into().ok())
+            panic!("Never used.")
         }
     }
 }
@@ -45,8 +47,9 @@ pub mod static_dim {
 #[cfg(test)]
 pub mod test {
     use super::*;
+    use std::fmt::Debug;
 
-    #[derive(Clone, Copy, Debug)]
+    #[derive(Clone, PartialEq, Debug)]
     pub struct X<const N: usize>(pub f64);
 
     pub struct UniformIter<R: rand::Rng, const N: usize>(R);

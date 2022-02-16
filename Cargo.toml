@@ -1,7 +1,7 @@
 [package]
 name = "probs"
 edition = "2021"
-version = "0.1.2"
+version = "0.2.0"
 authors = ["yihengdu"]
 
 categories = ["algorithms", "science"]
@@ -15,4 +15,7 @@ documentation = "https://docs.rs/probs/latest/probs"
 [dependencies]
 tqdm = "^0.3"
 rand = "^0.8"
+
 nalgebra = "^0.30"
+ndarray = "^0.15"
+nshare = "^0.9"
