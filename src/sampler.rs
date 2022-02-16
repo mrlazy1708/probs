@@ -1,9 +1,8 @@
 #[allow(unused_imports)]
-use super::{domain, domain::*};
+use super::*;
 
-extern crate nalgebra as na;
-extern crate ndarray as nd;
-extern crate nshare as ns;
+#[allow(unused_imports)]
+use super::{domain, domain::*};
 
 pub trait Global<D: Domain>: Clone {
     type Sampler<F: FnMut(&D) -> f64>: Iterator<Item = D>;
@@ -36,14 +35,14 @@ pub mod univar {
         use std::marker::PhantomData;
 
         #[derive(Clone)]
-        pub struct Method<D: FiniteDomain>(PhantomData<(D,)>);
-        impl<D: FiniteDomain> Method<D> {
+        pub struct Method<D: domain::Finite>(PhantomData<(D,)>);
+        impl<D: domain::Finite> Method<D> {
             #[allow(unused)]
             pub fn new() -> Self {
                 Method(PhantomData)
             }
         }
-        impl<D: FiniteDomain> Global<D> for Method<D> {
+        impl<D: domain::Finite> Global<D> for Method<D> {
             type Sampler<F: FnMut(&D) -> f64> = Sampler<D>;
             fn sample<F: FnMut(&D) -> f64>(&self, mut pdf: F) -> Self::Sampler<F> {
                 Sampler {
@@ -60,11 +59,11 @@ pub mod univar {
             }
         }
 
-        pub struct Sampler<D: FiniteDomain> {
+        pub struct Sampler<D: domain::Finite> {
             pub sum: rand::rngs::ThreadRng,
             pub cdf: Vec<(D, f64)>,
         }
-        impl<D: FiniteDomain> Iterator for Sampler<D> {
+        impl<D: domain::Finite> Iterator for Sampler<D> {
             type Item = D;
             fn next(&mut self) -> Option<Self::Item> {
                 let sum = self.cdf.last().unwrap().1;

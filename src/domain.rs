@@ -1,22 +1,23 @@
+#[allow(unused_imports)]
+use super::*;
+
 pub trait Domain: nalgebra::Scalar {
     type Iter: Iterator<Item = Self>;
     fn uniform() -> <Self as Domain>::Iter;
 }
 
-pub trait FiniteDomain: Domain {
+pub trait Finite: Domain {
     type Iter: Iterator<Item = Self>;
-    fn traverse() -> <Self as FiniteDomain>::Iter;
+    fn traverse() -> <Self as Finite>::Iter;
 }
 
-pub mod static_dimension {
+pub mod dimensioned {
     use super::*;
 
-    extern crate ndarray as na;
-
     pub struct UniformIter<D: Domain, const R: usize>([<D as Domain>::Iter; R]);
-    impl<D: Domain, const R: usize> Domain for na::Array<D, na::Dim<[usize; R]>>
+    impl<D: Domain, const R: usize> Domain for nd::Array<D, nd::Dim<[usize; R]>>
     where
-        na::Dim<[usize; R]>: na::Dimension,
+        nd::Dim<[usize; R]>: nd::Dimension,
     {
         type Iter = UniformIter<D, R>;
         fn uniform() -> <Self as Domain>::Iter {
@@ -31,9 +32,9 @@ pub mod static_dimension {
     }
     impl<D: Domain, const R: usize> Iterator for UniformIter<D, R>
     where
-        na::Dim<[usize; R]>: na::Dimension,
+        nd::Dim<[usize; R]>: nd::Dimension,
     {
-        type Item = na::Array<D, na::Dim<[usize; R]>>;
+        type Item = nd::Array<D, nd::Dim<[usize; R]>>;
         fn next(&mut self) -> Option<Self::Item> {
             panic!("Never used.")
         }
@@ -68,9 +69,9 @@ pub mod test {
     }
 
     pub struct TraverseIter<const N: usize>(usize);
-    impl<const N: usize> FiniteDomain for X<N> {
+    impl<const N: usize> Finite for X<N> {
         type Iter = TraverseIter<N>;
-        fn traverse() -> <Self as FiniteDomain>::Iter {
+        fn traverse() -> <Self as Finite>::Iter {
             TraverseIter(0)
         }
     }
