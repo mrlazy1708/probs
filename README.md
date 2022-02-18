@@ -1,6 +1,6 @@
 # probs
 
-Provide definition of `domain` and basic `distribution`. Implement basic `sampler` with `Iterator`.
+Provide definition of `domain` and basic `distribution`. Implement various `sampler` with `Iterator`.
 
 
 
@@ -17,14 +17,14 @@ fn test() {
 Sample a distribution with it
 
 ```rust
-		.sample(distribution::univar::normal::<i8>(0.0, 32.0))
+    .sample(distribution::univar::normal::<i8>(0.0, 32.0))
 ```
 
 Use it like an `Iterator` as you would
 
 ```rust
-		.enumerate()
-		.for_each(|(i, x)| println!("sample#{}: {}", i, x))
+    .enumerate()
+    .for_each(|(i, x)| println!("sample#{}: {}", i, x))
 }
 ```
 
@@ -36,7 +36,7 @@ Use it like an `Iterator` as you would
 
 ```rust
 sampler::univar::Icdf::new()
-	.sample(|x: &u8| (x % 8) as f64)
+  .sample(|x: &u8| (x % 8) as f64)
 ```
 
 
@@ -49,7 +49,7 @@ sampler::univar::Icdf::new()
 
 ```rust
 sampler::univar::Icdf::new()
-	.gibbs(nd::Dim([2, 2]), 100) // 2x2 domain; skip first 100 samples
-	.sample(|m: &nd::Array2<u8>| m.sum() as f64)
+  .gibbs(nd::Dim([2, 2]), 100) // 2x2 domain; skip first 100 samples
+  .sample(|m: &nd::Array2<u8>| m.sum() as f64)
 ```
 
