@@ -85,16 +85,15 @@ pub mod univar {
         }
 
         #[cfg(test)]
-        pub mod test {
+        mod test {
             use super::*;
-            use domain::test::X;
+            use domain::float::X;
 
             #[test]
             fn burst() {
                 use tqdm::Iter;
                 Icdf::<X<256>>::new()
-                    .sample(univar::test::normal::<256>(0.5, 0.2))
-                    .take(100000)
+                    .sample(distribution::univar::normal(0.5, 0.2))
                     .tqdm()
                     .for_each(drop);
             }
@@ -102,11 +101,11 @@ pub mod univar {
             #[test]
             fn oneshot() {
                 use tqdm::Iter;
-                (0..100000)
+                (0..)
                     .tqdm()
                     .map(|_| {
                         Icdf::<X<256>>::new()
-                            .sample(univar::test::normal::<256>(0.5, 0.2))
+                            .sample(distribution::univar::normal(0.5, 0.2))
                             .next()
                     })
                     .for_each(drop);
@@ -181,16 +180,15 @@ pub mod univar {
         }
 
         #[cfg(test)]
-        pub mod test {
+        mod test {
             use super::*;
-            use domain::test::X;
+            use domain::float::X;
 
             #[test]
             fn burst() {
                 use tqdm::Iter;
                 Slice::<X<256>>::new(100)
-                    .sample(univar::test::normal::<256>(0.5, 0.2))
-                    .take(100000)
+                    .sample(distribution::univar::normal(0.5, 0.2))
                     .tqdm()
                     .for_each(drop);
             }
@@ -198,11 +196,11 @@ pub mod univar {
             #[test]
             fn oneshot() {
                 use tqdm::Iter;
-                (0..100000)
+                (0..)
                     .tqdm()
                     .map(|_| {
                         Slice::<X<256>>::new(100)
-                            .sample(univar::test::normal::<256>(0.5, 0.2))
+                            .sample(distribution::univar::normal(0.5, 0.2))
                             .next()
                     })
                     .for_each(drop);
@@ -221,16 +219,6 @@ pub mod univar {
                     .take(100)
                     .for_each(|X(x)| println!("{:?}", x));
             }
-        }
-    }
-
-    #[cfg(test)]
-    pub mod test {
-        use super::*;
-        use domain::test::X;
-
-        pub fn normal<const N: usize>(mu: f64, sigma: f64) -> impl Fn(&X<N>) -> f64 {
-            move |&X(x)| (-(x - mu).powi(2) / (2.0 * sigma.powi(2))).exp()
         }
     }
 }
@@ -337,48 +325,48 @@ pub mod multivar {
                     self.state.clone()
                 }
             }
-        }
 
-        #[cfg(test)]
-        pub mod test {
-            use super::*;
-            use domain::test::X;
+            #[cfg(test)]
+            mod test {
+                use super::*;
+                use domain::float::X;
 
-            #[test]
-            fn dim2() {
-                univar::Icdf::<X<256>>::new()
-                    .gibbs(nd::Dim([2]), 100)
-                    .sample(multivar::test::normal::<256, 2>(
-                        na::vector![0.5, 0.5],
-                        na::matrix![
-                            0.01, 0.006;
-                            0.006, 0.02;
-                        ],
-                    ))
-                    .take(1000)
-                    .for_each(|xs| println!("{:?}", xs.map(|X(x)| x)));
-            }
+                #[test]
+                fn dim2() {
+                    univar::Icdf::<X<256>>::new()
+                        .gibbs(nd::Dim([2]), 100)
+                        .sample(multivar::test::normal::<256, 2>(
+                            na::vector![0.5, 0.5],
+                            na::matrix![
+                                0.01, 0.006;
+                                0.006, 0.02;
+                            ],
+                        ))
+                        .take(1000)
+                        .for_each(|xs| println!("{:?}", xs.map(|X(x)| x)));
+                }
 
-            #[test]
-            fn ill_shaped() {
-                univar::Icdf::<X<10>>::new()
-                    .gibbs(nd::Dim([100]), 100)
-                    .sample(|xs| {
-                        xs.iter()
-                            .map(|&X(x)| (if x == 0.5 { 99.0 } else { -1.0 }) * 0.05)
-                            .sum::<f64>()
-                            .exp()
-                    })
-                    .take(100)
-                    .for_each(|xs| println!("{:?}", xs.map(|X(x)| x)));
+                #[test]
+                fn ill_shaped() {
+                    univar::Icdf::<X<10>>::new()
+                        .gibbs(nd::Dim([100]), 100)
+                        .sample(|xs| {
+                            xs.iter()
+                                .map(|&X(x)| (if x == 0.5 { 99.0 } else { -1.0 }) * 0.05)
+                                .sum::<f64>()
+                                .exp()
+                        })
+                        .take(100)
+                        .for_each(|xs| println!("{:?}", xs.map(|X(x)| x)));
+                }
             }
         }
     }
 
     #[cfg(test)]
-    pub mod test {
+    mod test {
         use super::*;
-        use domain::test::X;
+        use domain::float::X;
 
         pub fn normal<const N: usize, const R: usize>(
             mu: na::SVector<f64, R>,
