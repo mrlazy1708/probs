@@ -1,26 +1,26 @@
-# probs
+# Probs
 
-Provide definition of `domain` and basic `distribution`. Implement various `sampler` with `Iterator`.
+Draw samples from certain domain with various sampling techniques. 
 
 
 
-## Basic Usage
+## Usage
 
-Construct a sampler of certain sampling technique
+Construct a sampler of certain type 
 
 ```rust
-use sampler::Global;
+use sampler::Sampler;
 fn test() {
   sampler::univar::Icdf::new()
 ```
 
-Sample a distribution with it
+Sample a distribution with it 
 
 ```rust
-    .sample(distribution::univar::normal::<i8>(0.0, 32.0))
+    .sample(distribution::univar::gaussian::<i8>(0.0, 32.0))
 ```
 
-Use it like an `Iterator` as you would
+Use it like any `Iterator` as you would 
 
 ```rust
     .enumerate()
@@ -30,26 +30,36 @@ Use it like an `Iterator` as you would
 
 
 
-## Arbitrary Distribution
+## Distribution
 
-**ANY** customized distribution can be sampled with provided samplers
+**ANY** customized/wired distribution can be sampled with provided samplers
 
 ```rust
 sampler::univar::Icdf::new()
   .sample(|x: &u8| (x % 8) as f64)
 ```
 
+> Some sampler needs a burn-in period to achieve equilibrium
+
 
 
 ## Multi-dimensional
 
-[Gibbs Sampler](https://wikipedia.org/wiki/Gibbs_sampling) is used to sample distribution on high dimension
+[Metropolis Sampler](https://en.wikipedia.org/wiki/Metropolis–Hastings_algorithm) is used to sample distribution from high dimension
 
 - Fix-dimensioned domain is represented with [ndarray](https://crates.io/crates/ndarray)
 
 ```rust
-sampler::univar::Icdf::new()
-  .gibbs(nd::Dim([2, 2]), 100) // 2x2 domain; skip first 100 samples
-  .sample(|m: &nd::Array2<u8>| m.sum() as f64)
+sampler::multivar::Metropolis::<f64, nd::Ix1>::new(nd::Array::zeros([2]))
+    .sample(
+        distribution::multivar::gaussian(
+            na::vector![0.5, 0.5],
+            na::matrix![
+                    0.01, 0.006;
+                    0.006, 0.02;
+            ],
+        ),
+    )
+    .burn(1000)  // burn-in
 ```
 

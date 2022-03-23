@@ -1,223 +1,73 @@
-#[allow(unused_imports)]
 use super::*;
 
-#[allow(unused_imports)]
-use super::{domain, domain::*};
+pub trait Sampler<D> {
+    type Iter<F: FnMut(&D) -> f64>: Iterator<Item = D>;
+    fn sample<F: FnMut(&D) -> f64>(&self, pdf: F) -> Self::Iter<F>;
 
-pub trait Global<D: Domain>: Clone {
-    type Sampler<F: FnMut(&D) -> f64>: Iterator<Item = D>;
-    fn sample<F: FnMut(&D) -> f64>(&self, pdf: F) -> <Self as Global<D>>::Sampler<F>;
-
-    fn gibbs<const R: usize>(
-        self,
-        dim: ndarray::Dim<[usize; R]>,
-        skip: usize,
-    ) -> multivar::Gibbs<D, Self, R> {
-        multivar::Gibbs::new(self, dim, skip)
+    fn burn(self, skip: usize) -> adapter::BurnIn<D, Self>
+    where
+        Self: Sized,
+    {
+        adapter::BurnIn::new(self, skip)
     }
 }
 
-pub trait Local<D: Domain + std::ops::Index<I>, I>: Global<D> {
-    type Sampler<F: FnMut(&D, I) -> f64>: Iterator<Item = D>;
-    fn sample<F: FnMut(&D, I) -> f64>(&self, pdf: F) -> <Self as Local<D, I>>::Sampler<F>;
-}
-
-#[doc = "Sample from certain domain."]
+#[doc = "Sample from one-dimensional domain."]
 pub mod univar {
     use super::*;
 
-    pub use icdf::Method as Icdf;
-    pub use slice::Method as Slice;
+    pub use icdf::Sampler as Icdf;
 
     #[doc = "Inverse Transform Sampling."]
     pub mod icdf {
         use super::*;
-        use std::marker::PhantomData;
 
-        #[derive(Clone)]
-        pub struct Method<D: domain::Finite>(PhantomData<(D,)>);
-        impl<D: domain::Finite> Method<D> {
+        pub struct Sampler<D: Finite>(std::marker::PhantomData<D>);
+        impl<D: Finite> Sampler<D> {
             #[allow(unused)]
             pub fn new() -> Self {
-                Method(PhantomData)
+                Sampler(std::marker::PhantomData)
             }
         }
-        impl<D: domain::Finite> Global<D> for Method<D> {
-            type Sampler<F: FnMut(&D) -> f64> = Sampler<D>;
-            fn sample<F: FnMut(&D) -> f64>(&self, mut pdf: F) -> Self::Sampler<F> {
-                Sampler {
-                    sum: rand::thread_rng(),
-                    cdf: D::traverse()
-                        .map(|x| (x.clone(), pdf(&x)))
-                        .scan(0.0, |c, (x, p)| {
-                            *c = *c + p;
-                            assert!(c.is_finite(), "PDF overflow");
-                            Some((x, *c))
-                        })
-                        .collect(),
-                }
-            }
-        }
+        impl<D: Finite> super::Sampler<D> for Sampler<D> {
+            type Iter<F: FnMut(&D) -> f64> = impl Iterator<Item = D>;
+            fn sample<F: FnMut(&D) -> f64>(&self, pdf: F) -> Self::Iter<F> {
+                use std::ops::AddAssign;
+                let xs: Vec<D> = D::traverse().collect();
+                let ys: Vec<f64> = xs.iter().map(pdf).collect();
+                let zs: Vec<f64> = ys
+                    .iter()
+                    .scan(0.0, |z, y| {
+                        z.add_assign(y);
+                        Some(z.clone())
+                    })
+                    .collect();
 
-        pub struct Sampler<D: domain::Finite> {
-            pub sum: rand::rngs::ThreadRng,
-            pub cdf: Vec<(D, f64)>,
-        }
-        impl<D: domain::Finite> Iterator for Sampler<D> {
-            type Item = D;
-            fn next(&mut self) -> Option<Self::Item> {
-                let sum = self.cdf.last().unwrap().1;
-                match sum {
-                    sum if sum > 0.0 => {
-                        use rand::Rng;
-                        let value = self.sum.gen_range(0.0..sum);
-                        let pos = self
-                            .cdf
-                            .binary_search_by(|(_value, p)| p.partial_cmp(&value).unwrap());
+                let sum: f64 = ys.iter().sum();
+                assert!(sum > 0.0, "pdf non-positive.");
+                assert!(sum.is_finite(), "pdf overflow.");
 
-                        self.cdf
-                            .get(pos.unwrap_or_else(|pos| pos))
-                            .map(|(value, _p)| value.clone())
-                    }
-                    _ => None, // in case of p(x) === 0.0 or NaN
-                }
+                let mut aux = rand::thread_rng();
+                std::iter::from_fn(move || {
+                    use rand::Rng;
+                    let aux = aux.gen_range(0.0..sum);
+                    let pos = zs.binary_search_by(|z| z.partial_cmp(&aux).unwrap());
+                    let pos = pos.unwrap_or_else(|pos| pos);
+                    Some(xs[pos].clone())
+                })
             }
         }
 
         #[cfg(test)]
-        mod test {
+        mod tests {
             use super::*;
-            use domain::float::X;
 
             #[test]
-            fn burst() {
-                use tqdm::Iter;
-                Icdf::<X<256>>::new()
-                    .sample(distribution::univar::normal(0.5, 0.2))
-                    .tqdm()
-                    .for_each(drop);
-            }
-
-            #[test]
-            fn oneshot() {
-                use tqdm::Iter;
-                (0..)
-                    .tqdm()
-                    .map(|_| {
-                        Icdf::<X<256>>::new()
-                            .sample(distribution::univar::normal(0.5, 0.2))
-                            .next()
-                    })
-                    .for_each(drop);
-            }
-
-            #[test]
-            fn ill_shaped() {
-                Icdf::<X<256>>::new()
-                    .sample(|&X(x)| {
-                        if x == 0.0 / 256.0 || x == 255.0 / 256.0 {
-                            1.0000
-                        } else {
-                            0.0001
-                        }
-                    })
-                    .take(100)
-                    .for_each(|X(x)| println!("{:?}", x));
-            }
-        }
-    }
-
-    #[doc = "Slice Sampling."]
-    pub mod slice {
-        use super::*;
-        use std::marker::PhantomData;
-
-        #[derive(Clone)]
-        pub struct Method<D: Domain>(PhantomData<(D,)>, usize);
-        impl<D: Domain> Method<D> {
-            #[allow(unused)]
-            pub fn new(skip: usize) -> Self {
-                Method(PhantomData, skip)
-            }
-        }
-        impl<D: Domain> Global<D> for Method<D> {
-            type Sampler<F: FnMut(&D) -> f64> = std::iter::Skip<Sampler<D, F>>;
-            fn sample<F: FnMut(&D) -> f64>(&self, pdf: F) -> Self::Sampler<F> {
-                Sampler {
-                    aux: rand::thread_rng(),
-                    pdf,
-
-                    state: D::uniform().next(),
-                }
-                .skip(self.1)
-            }
-        }
-
-        pub struct Sampler<D: Domain, F: FnMut(&D) -> f64> {
-            pub aux: rand::rngs::ThreadRng,
-            pub pdf: F,
-
-            pub state: Option<D>,
-        }
-        impl<D: Domain, F: FnMut(&D) -> f64> Iterator for Sampler<D, F> {
-            type Item = D;
-            fn next(&mut self) -> Option<Self::Item> {
-                self.state = self
-                    .state
-                    .take()
-                    .or_else(|| D::uniform().next())
-                    .and_then(|x| match (self.pdf)(&x) {
-                        y if y > 0.0 && y.is_finite() => {
-                            use rand::Rng;
-                            let y = self.aux.gen_range(0.0..=y);
-                            D::uniform().skip_while(|x| (self.pdf)(x) < y).next()
-                        }
-                        _ => self.next(), // in case of p(x) == 0.0 or NaN
-                    });
-
-                self.state.clone()
-            }
-        }
-
-        #[cfg(test)]
-        mod test {
-            use super::*;
-            use domain::float::X;
-
-            #[test]
-            fn burst() {
-                use tqdm::Iter;
-                Slice::<X<256>>::new(100)
-                    .sample(distribution::univar::normal(0.5, 0.2))
-                    .tqdm()
-                    .for_each(drop);
-            }
-
-            #[test]
-            fn oneshot() {
-                use tqdm::Iter;
-                (0..)
-                    .tqdm()
-                    .map(|_| {
-                        Slice::<X<256>>::new(100)
-                            .sample(distribution::univar::normal(0.5, 0.2))
-                            .next()
-                    })
-                    .for_each(drop);
-            }
-
-            #[test]
-            fn ill_shaped() {
-                Slice::<X<256>>::new(1000)
-                    .sample(|&X(x)| {
-                        if x == 0.0 / 256.0 || x == 255.0 / 256.0 {
-                            1.0000
-                        } else {
-                            0.0001
-                        }
-                    })
-                    .take(100)
-                    .for_each(|X(x)| println!("{:?}", x));
+            fn gaussian() {
+                super::test::sample(
+                    Icdf::<float::X<256>>::new(),
+                    distribution::univar::gaussian(0.5, 0.2),
+                );
             }
         }
     }
@@ -227,157 +77,119 @@ pub mod univar {
 pub mod multivar {
     use super::*;
 
-    pub use gibbs::Method as Gibbs;
+    pub use metropolis::Sampler as Metropolis;
+    // pub use gibbs::Sampler as Gibbs;
 
-    #[doc = "Gibbs Sampling with static dimension."]
-    pub mod gibbs {
+    #[doc = "Metropolis-Hausting Sampling Algorithm."]
+    pub mod metropolis {
         use super::*;
-        use std::marker::PhantomData;
 
-        #[derive(Clone)]
-        pub struct Method<D: Domain, S: Global<D>, const R: usize>(
-            PhantomData<(D,)>,
-            S,
-            nd::Dim<[usize; R]>,
-            usize,
-        );
-        impl<D: Domain, S: Global<D>, const R: usize> Method<D, S, R> {
+        pub struct Sampler<D: Uniform, R: nd::Dimension>(nd::Array<D, R>);
+        impl<D: Uniform, R: nd::Dimension> Sampler<D, R> {
             #[allow(unused)]
-            pub fn new(sub: S, dim: nd::Dim<[usize; R]>, skip: usize) -> Self {
-                Method(PhantomData, sub, dim, skip)
+            pub fn new(init: nd::Array<D, R>) -> Self {
+                Sampler(init)
             }
         }
-        impl<D: Domain, S: Global<D>, const R: usize> Global<nd::Array<D, nd::Dim<[usize; R]>>>
-            for Method<D, S, R>
-        where
-            nd::Dim<[usize; R]>: nd::Dimension,
-        {
-            type Sampler<F: FnMut(&nd::Array<D, nd::Dim<[usize; R]>>) -> f64> =
-                std::iter::Skip<global::Sampler<D, S, F, R>>;
-            fn sample<F: FnMut(&nd::Array<D, nd::Dim<[usize; R]>>) -> f64>(
-                &self,
-                pdf: F,
-            ) -> Self::Sampler<F> {
-                let mut init = D::uniform();
-                global::Sampler {
-                    sub: self.1.clone(),
-                    pdf,
+        impl<D: Uniform, R: nd::Dimension> super::Sampler<nd::Array<D, R>> for Sampler<D, R> {
+            type Iter<F: FnMut(&nd::Array<D, R>) -> f64> = impl Iterator<Item = nd::Array<D, R>>;
+            fn sample<F: FnMut(&nd::Array<D, R>) -> f64>(&self, mut pdf: F) -> Self::Iter<F> {
+                let mut state = self.0.clone();
+                let (shape, ptr) = (state.raw_dim(), state.as_mut_ptr());
 
-                    state: Some(nd::Array::from_shape_fn(self.2, |_| init.next().unwrap())),
-                }
-                .skip(self.3)
+                let mut uniform = D::uniform();
+                let mut accept = rand::thread_rng();
+                std::iter::repeat_with(move || unsafe {
+                    nd::ArrayViewMut::from_shape_ptr(shape.clone(), ptr).into_iter()
+                })
+                .flatten()
+                .filter_map(move |value| {
+                    use rand::Rng;
+                    let old_p = pdf(&state);
+
+                    let new_value = uniform.next().expect("uniform_sampler failed.");
+                    let old_value = std::mem::replace(value, new_value);
+
+                    let new_p = pdf(&state);
+                    if accept.gen_range(0.0..=old_p) < new_p {
+                        Some(state.clone()) /* Accepted. Return state. */
+                    } else {
+                        drop(std::mem::replace(value, old_value));
+                        None /* Not accepted. Revert to old_value. */
+                    }
+                })
             }
         }
 
-        pub mod global {
+        #[cfg(test)]
+        mod tests {
             use super::*;
 
-            pub struct Sampler<
-                D: Domain,
-                S: Global<D>,
-                F: FnMut(&nd::Array<D, nd::Dim<[usize; R]>>) -> f64,
-                const R: usize,
-            > {
-                pub sub: S,
-                pub pdf: F,
-
-                pub state: Option<nd::Array<D, nd::Dim<[usize; R]>>>,
-            }
-            impl<
-                    D: Domain,
-                    S: Global<D>,
-                    F: FnMut(&nd::Array<D, nd::Dim<[usize; R]>>) -> f64,
-                    const R: usize,
-                > Iterator for Sampler<D, S, F, R>
-            where
-                nd::Dim<[usize; R]>: nd::Dimension,
-            {
-                type Item = nd::Array<D, nd::Dim<[usize; R]>>;
-                fn next(&mut self) -> Option<Self::Item> {
-                    if let Some(mut state) = Option::take(&mut self.state) {
-                        let new_state: Option<Vec<D>> = unsafe {
-                            let ptr = state.as_mut_ptr();
-                            nd::ArrayViewMut::from_shape_ptr(state.raw_dim(), ptr)
-                                .iter_mut()
-                                .map(|value| {
-                                    let new = self
-                                        .sub
-                                        .sample(|x| {
-                                            *value = x.clone();
-                                            (self.pdf)(&state)
-                                        })
-                                        .next()
-                                        .or_else(|| D::uniform().next());
-                                    if let Some(new) = new.as_ref() {
-                                        *value = new.clone();
-                                    }
-
-                                    new
-                                })
-                                .collect()
-                        };
-
-                        if let Some(new_state) = new_state {
-                            self.state = nd::Array::from_shape_vec(state.raw_dim(), new_state).ok();
-                        }
-                    }
-
-                    self.state.clone()
-                }
-            }
-
-            #[cfg(test)]
-            mod test {
-                use super::*;
-                use domain::float::X;
-
-                #[test]
-                fn dim2() {
-                    univar::Icdf::<X<256>>::new()
-                        .gibbs(nd::Dim([2]), 100)
-                        .sample(multivar::test::normal::<256, 2>(
-                            na::vector![0.5, 0.5],
-                            na::matrix![
-                                0.01, 0.006;
-                                0.006, 0.02;
-                            ],
-                        ))
-                        .take(1000)
-                        .for_each(|xs| println!("{:?}", xs.map(|X(x)| x)));
-                }
-
-                #[test]
-                fn ill_shaped() {
-                    univar::Icdf::<X<10>>::new()
-                        .gibbs(nd::Dim([100]), 100)
-                        .sample(|xs| {
-                            xs.iter()
-                                .map(|&X(x)| (if x == 0.5 { 99.0 } else { -1.0 }) * 0.05)
-                                .sum::<f64>()
-                                .exp()
-                        })
-                        .take(100)
-                        .for_each(|xs| println!("{:?}", xs.map(|X(x)| x)));
-                }
+            #[test]
+            fn gaussian() {
+                super::test::sample(
+                    multivar::Metropolis::<f64, nd::Ix1>::new(nd::Array::zeros([2])),
+                    distribution::multivar::gaussian(
+                        na::vector![0.5, 0.5],
+                        na::matrix![
+                            0.01, 0.006;
+                            0.006, 0.02;
+                        ],
+                    ),
+                );
             }
         }
     }
+}
 
-    #[cfg(test)]
-    mod test {
-        use super::*;
-        use domain::float::X;
+#[doc = "Sampler adapters."]
+pub mod adapter {
+    use super::*;
 
-        pub fn normal<const N: usize, const R: usize>(
-            mu: na::SVector<f64, R>,
-            sigma: na::SMatrix<f64, R, R>,
-        ) -> impl Fn(&nd::Array<X<N>, nd::Dim<[usize; 1]>>) -> f64 {
-            let isigma = sigma.try_inverse().unwrap();
-            move |xs| {
-                use ns::ToNalgebra;
-                let xs = xs.map(|&X(x)| x).into_nalgebra() - mu;
-                (-(isigma * xs).dot(&xs) / 2.0).exp()
-            }
+    pub struct BurnIn<D, S: Sampler<D>>(std::marker::PhantomData<D>, S, usize);
+    impl<D, S: Sampler<D>> BurnIn<D, S> {
+        #[allow(unused)]
+        pub fn new(sampler: S, skip: usize) -> Self {
+            BurnIn(std::marker::PhantomData, sampler, skip)
         }
+    }
+    impl<D: Scalar, S: Sampler<D>> Sampler<D> for BurnIn<D, S> {
+        type Iter<F: FnMut(&D) -> f64> = std::iter::Skip<S::Iter<F>>;
+        fn sample<F: FnMut(&D) -> f64>(&self, pdf: F) -> Self::Iter<F> {
+            self.1.sample(pdf).skip(self.2)
+        }
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                    TEST                                    */
+/* -------------------------------------------------------------------------- */
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::fmt::Display;
+
+    pub fn sample<D: 'static + Display + Send>(sampler: impl Sampler<D>, pdf: impl Fn(&D) -> f64) {
+        let (sender, receiver) = std::sync::mpsc::channel();
+
+        std::thread::spawn(move || {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .open("target/sample.txt")
+                .unwrap();
+            loop {
+                let x = receiver.recv().unwrap();
+                writeln!(file, "{}", x).unwrap();
+            }
+        });
+
+        use tqdm::Iter;
+        sampler
+            .sample(pdf)
+            .tqdm()
+            .for_each(|x| sender.send(x).unwrap());
     }
 }
