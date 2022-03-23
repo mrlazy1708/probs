@@ -11,7 +11,7 @@ pub trait Sampler<D> {
         adapter::BurnIn::new(self, skip)
     }
 
-    fn every(self, interval: usize) -> adapter::Every<D, Self>
+    fn pick(self, interval: usize) -> adapter::Every<D, Self>
     where
         Self: Sized,
     {
