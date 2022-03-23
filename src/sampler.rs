@@ -83,6 +83,7 @@ pub mod univar {
 #[doc = "Sample from multiple correlated domain."]
 pub mod multivar {
     use super::*;
+    use std::sync::Arc;
 
     pub use metropolis::Sampler as Metropolis;
     // pub use gibbs::Sampler as Gibbs;
@@ -91,20 +92,22 @@ pub mod multivar {
     pub mod metropolis {
         use super::*;
 
-        pub struct Sampler<D: Uniform, R: nd::Dimension>(nd::Array<D, R>);
-        impl<D: Uniform, R: nd::Dimension> Sampler<D, R> {
+        pub struct Sampler<D: Scalar, R: nd::Dimension, P: Fn(&D) -> D>(nd::Array<D, R>, Arc<P>);
+        impl<D: Scalar, R: nd::Dimension, P: Fn(&D) -> D> Sampler<D, R, P> {
             #[allow(unused)]
-            pub fn new(init: nd::Array<D, R>) -> Self {
-                Sampler(init)
+            pub fn new(init: nd::Array<D, R>, proposal: P) -> Self {
+                Sampler(init, Arc::new(proposal))
             }
         }
-        impl<D: Uniform, R: nd::Dimension> super::Sampler<nd::Array<D, R>> for Sampler<D, R> {
+        impl<D: Scalar, R: nd::Dimension, P: Fn(&D) -> D> super::Sampler<nd::Array<D, R>>
+            for Sampler<D, R, P>
+        {
             type Iter<F: FnMut(&nd::Array<D, R>) -> f64> = impl Iterator<Item = nd::Array<D, R>>;
             fn sample<F: FnMut(&nd::Array<D, R>) -> f64>(&self, mut pdf: F) -> Self::Iter<F> {
                 let mut state = self.0.clone();
                 let (shape, ptr) = (state.raw_dim(), state.as_mut_ptr());
 
-                let mut uniform = D::uniform();
+                let proposal = self.1.clone();
                 let mut accept = rand::thread_rng();
                 std::iter::repeat_with(move || unsafe {
                     nd::ArrayViewMut::from_shape_ptr(shape.clone(), ptr).into_iter()
@@ -114,7 +117,7 @@ pub mod multivar {
                     use rand::Rng;
                     let old_p = pdf(&state);
 
-                    let new_value = uniform.next().expect("uniform_sampler failed.");
+                    let new_value = proposal(value);
                     let old_value = std::mem::replace(value, new_value);
 
                     let new_p = pdf(&state);
@@ -135,7 +138,7 @@ pub mod multivar {
             #[test]
             fn gaussian() {
                 super::test::sample(
-                    multivar::Metropolis::<f64, nd::Ix1>::new(nd::Array::zeros([2])),
+                    multivar::Metropolis::new(nd::Array::zeros([2]), |_: &f64| rand::random()),
                     distribution::multivar::gaussian(
                         na::vector![0.5, 0.5],
                         na::matrix![
