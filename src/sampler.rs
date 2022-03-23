@@ -10,9 +10,16 @@ pub trait Sampler<D> {
     {
         adapter::BurnIn::new(self, skip)
     }
+
+    fn every(self, interval: usize) -> adapter::Every<D, Self>
+    where
+        Self: Sized,
+    {
+        adapter::Every::new(self, interval)
+    }
 }
 
-#[doc = "Sample from one-dimensional domain."]
+#[doc = "Sample from univariate domain."]
 pub mod univar {
     use super::*;
 
@@ -146,17 +153,49 @@ pub mod multivar {
 pub mod adapter {
     use super::*;
 
-    pub struct BurnIn<D, S: Sampler<D>>(std::marker::PhantomData<D>, S, usize);
-    impl<D, S: Sampler<D>> BurnIn<D, S> {
-        #[allow(unused)]
-        pub fn new(sampler: S, skip: usize) -> Self {
-            BurnIn(std::marker::PhantomData, sampler, skip)
+    pub use burn::Sampler as BurnIn;
+    pub use every::Sampler as Every;
+
+    #[doc = "Apply burn-in period."]
+    pub mod burn {
+        use super::*;
+
+        pub struct Sampler<D, S: super::Sampler<D>>(std::marker::PhantomData<D>, S, usize);
+        impl<D, S: super::Sampler<D>> Sampler<D, S> {
+            #[allow(unused)]
+            pub fn new(sampler: S, skip: usize) -> Self {
+                Sampler(std::marker::PhantomData, sampler, skip)
+            }
+        }
+        impl<D: Scalar, S: super::Sampler<D>> super::Sampler<D> for Sampler<D, S> {
+            type Iter<F: FnMut(&D) -> f64> = impl Iterator<Item = D>;
+            fn sample<F: FnMut(&D) -> f64>(&self, pdf: F) -> Self::Iter<F> {
+                self.1.sample(pdf).skip(self.2)
+            }
         }
     }
-    impl<D: Scalar, S: Sampler<D>> Sampler<D> for BurnIn<D, S> {
-        type Iter<F: FnMut(&D) -> f64> = std::iter::Skip<S::Iter<F>>;
-        fn sample<F: FnMut(&D) -> f64>(&self, pdf: F) -> Self::Iter<F> {
-            self.1.sample(pdf).skip(self.2)
+
+    #[doc = "Pick samples over intervals."]
+    pub mod every {
+        use super::*;
+
+        pub struct Sampler<D, S: super::Sampler<D>>(std::marker::PhantomData<D>, S, usize);
+        impl<D, S: super::Sampler<D>> Sampler<D, S> {
+            #[allow(unused)]
+            pub fn new(sampler: S, interval: usize) -> Self {
+                Sampler(std::marker::PhantomData, sampler, interval)
+            }
+        }
+        impl<D: Scalar, S: super::Sampler<D>> super::Sampler<D> for Sampler<D, S> {
+            type Iter<F: FnMut(&D) -> f64> = impl Iterator<Item = D>;
+            fn sample<F: FnMut(&D) -> f64>(&self, pdf: F) -> Self::Iter<F> {
+                let mut sampler = self.1.sample(pdf);
+                let count = self.2 - 1;
+                std::iter::from_fn(move || {
+                    (0..count).for_each(|_| drop(sampler.next()));
+                    sampler.next()
+                })
+            }
         }
     }
 }
