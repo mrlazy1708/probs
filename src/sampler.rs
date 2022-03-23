@@ -122,10 +122,10 @@ pub mod multivar {
 
                     let new_p = pdf(&state);
                     if accept.gen_range(0.0..=old_p) < new_p {
-                        Some(state.clone()) /* Accepted. Return state. */
+                        Some(state.clone()) /* Accepted. Return next state. */
                     } else {
                         drop(std::mem::replace(value, old_value));
-                        None /* Not accepted. Revert to old_value. */
+                        None /* Rejected. Revert to old_value and return None. */
                     }
                 })
             }
