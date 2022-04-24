@@ -6,7 +6,7 @@ Draw samples in any distribution with various sampling techniques.
 
 ## Usage
 
-Construct a sampler with [builder pattern](https://doc.rust-lang.org/style/ownership/builders.html) 
+Construct a sampler with [builder pattern](https://doc.rust-lang.org/1.0.0/style/ownership/builders.html) 
 
 ```rust
 use randvar::modular::Z;
