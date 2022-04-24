@@ -1,46 +1,59 @@
 use super::*;
 
-pub trait Sampler<D> {
+pub trait Sampler<D: na::Scalar> {
     type Iter<F: FnMut(&D) -> f64>: Iterator<Item = D>;
     fn sample<F: FnMut(&D) -> f64>(&self, pdf: F) -> Self::Iter<F>;
 
-    fn burn(self, skip: usize) -> adapter::BurnIn<D, Self>
+    fn burn(self, skip: usize) -> adapter::Burn<D, Self>
     where
         Self: Sized,
     {
-        adapter::BurnIn::new(self, skip)
+        adapter::Burn::new(self, skip)
     }
 
-    fn pick(self, interval: usize) -> adapter::Every<D, Self>
+    fn pick(self, interval: usize) -> adapter::Pick<D, Self>
     where
         Self: Sized,
     {
-        adapter::Every::new(self, interval)
+        adapter::Pick::new(self, interval)
+    }
+
+    fn gibbs<R: nd::Dimension>(self, dim: R) -> multivar::Gibbs<D, R, Self>
+    where
+        Self: Sized,
+        D: Domain,
+    {
+        multivar::Gibbs::new(dim, self)
     }
 }
 
-#[doc = "Sample from univariate domain."]
+#[doc = "Sample from univariate domain"]
 pub mod univar {
     use super::*;
 
     pub use icdf::Sampler as Icdf;
+    pub use metropolis::Sampler as Metropolis;
 
-    #[doc = "Inverse Transform Sampling."]
+    #[doc = "Inverse Transform Sampling"]
     pub mod icdf {
         use super::*;
 
-        pub struct Sampler<D: Finite>(std::marker::PhantomData<D>);
-        impl<D: Finite> Sampler<D> {
+        pub struct Sampler<D: Domain + Discrete> {
+            pd: std::marker::PhantomData<D>,
+        }
+        impl<D: Domain + Discrete> Sampler<D> {
             #[allow(unused)]
             pub fn new() -> Self {
-                Sampler(std::marker::PhantomData)
+                Sampler {
+                    pd: std::marker::PhantomData,
+                }
             }
         }
-        impl<D: Finite> super::Sampler<D> for Sampler<D> {
+        impl<D: Domain + Discrete> super::Sampler<D> for Sampler<D> {
             type Iter<F: FnMut(&D) -> f64> = impl Iterator<Item = D>;
             fn sample<F: FnMut(&D) -> f64>(&self, pdf: F) -> Self::Iter<F> {
                 use std::ops::AddAssign;
-                let xs: Vec<D> = D::traverse().collect();
+                let xs: Vec<D> = D::iter().collect();
                 let ys: Vec<f64> = xs.iter().map(pdf).collect();
                 let zs: Vec<f64> = ys
                     .iter()
@@ -51,8 +64,8 @@ pub mod univar {
                     .collect();
 
                 let sum: f64 = ys.iter().sum();
-                assert!(sum > 0.0, "pdf non-positive.");
-                assert!(sum.is_finite(), "pdf overflow.");
+                assert!(sum > 0.0, "pdf isn't positive");
+                assert!(sum.is_finite(), "pdf overflow");
 
                 let mut aux = rand::thread_rng();
                 std::iter::from_fn(move || {
@@ -68,65 +81,56 @@ pub mod univar {
         #[cfg(test)]
         mod tests {
             use super::*;
+            use modular::*;
 
             #[test]
             fn gaussian() {
                 super::test::sample(
-                    Icdf::<float::X<256>>::new(),
-                    distribution::univar::gaussian(0.5, 0.2),
+                    univar::Icdf::<Z<256>>::new(),
+                    dist::univar::gaussian(128.0, 32.0),
                 );
             }
         }
     }
-}
 
-#[doc = "Sample from multiple correlated domain."]
-pub mod multivar {
-    use super::*;
-    use std::sync::Arc;
-
-    pub use metropolis::Sampler as Metropolis;
-    // pub use gibbs::Sampler as Gibbs;
-
-    #[doc = "Metropolis-Hausting Sampling Algorithm."]
+    #[doc = "Metropolis-Hausting Sampling"]
     pub mod metropolis {
         use super::*;
+        use std::sync::*;
 
-        pub struct Sampler<D: Scalar, R: nd::Dimension, P: Fn(&D) -> D>(nd::Array<D, R>, Arc<P>);
-        impl<D: Scalar, R: nd::Dimension, P: Fn(&D) -> D> Sampler<D, R, P> {
+        pub struct Sampler<D: Domain, P: Fn(&D) -> D> {
+            pd: std::marker::PhantomData<D>,
+            pub proposal: Arc<P>,
+        }
+        impl<D: Domain, P: Fn(&D) -> D> Sampler<D, P> {
             #[allow(unused)]
-            pub fn new(init: nd::Array<D, R>, proposal: P) -> Self {
-                Sampler(init, Arc::new(proposal))
+            pub fn new(proposal: P) -> Self {
+                Sampler {
+                    pd: std::marker::PhantomData,
+                    proposal: Arc::new(proposal),
+                }
             }
         }
-        impl<D: Scalar, R: nd::Dimension, P: Fn(&D) -> D> super::Sampler<nd::Array<D, R>>
-            for Sampler<D, R, P>
-        {
-            type Iter<F: FnMut(&nd::Array<D, R>) -> f64> = impl Iterator<Item = nd::Array<D, R>>;
-            fn sample<F: FnMut(&nd::Array<D, R>) -> f64>(&self, mut pdf: F) -> Self::Iter<F> {
-                let mut state = self.0.clone();
-                let (shape, ptr) = (state.raw_dim(), state.as_mut_ptr());
+        impl<D: Domain, P: Fn(&D) -> D> super::Sampler<D> for Sampler<D, P> {
+            type Iter<F: FnMut(&D) -> f64> = impl Iterator<Item = D>;
+            fn sample<F: FnMut(&D) -> f64>(&self, mut pdf: F) -> Self::Iter<F> {
+                let proposal = self.proposal.clone();
+                let mut state = D::random().next().unwrap();
+                let mut prob = pdf(&state);
 
-                let proposal = self.1.clone();
-                let mut accept = rand::thread_rng();
-                std::iter::repeat_with(move || unsafe {
-                    nd::ArrayViewMut::from_shape_ptr(shape.clone(), ptr).into_iter()
-                })
-                .flatten()
-                .filter_map(move |value| {
+                let mut aux = rand::thread_rng();
+                std::iter::from_fn(move || {
+                    let new_state = proposal(&state);
+                    let new_prob = pdf(&new_state);
+
                     use rand::Rng;
-                    let old_p = pdf(&state);
-
-                    let new_value = proposal(value);
-                    let old_value = std::mem::replace(value, new_value);
-
-                    let new_p = pdf(&state);
-                    if accept.gen_range(0.0..=old_p) < new_p {
-                        Some(state.clone()) /* Accepted. Return next state. */
-                    } else {
-                        drop(std::mem::replace(value, old_value));
-                        None /* Rejected. Revert to old_value and return None. */
+                    let aux = aux.gen_range(0.0..1.0);
+                    if aux <= new_prob / prob {
+                        state = new_state;
+                        prob = new_prob;
                     }
+
+                    Some(state.clone())
                 })
             }
         }
@@ -134,16 +138,90 @@ pub mod multivar {
         #[cfg(test)]
         mod tests {
             use super::*;
+            use modular::*;
 
             #[test]
             fn gaussian() {
                 super::test::sample(
-                    multivar::Metropolis::new(nd::Array::zeros([2]), |_: &f64| rand::random()),
-                    distribution::multivar::gaussian(
-                        na::vector![0.5, 0.5],
+                    univar::Metropolis::new(|&_| Z::<256>::random().next().unwrap()),
+                    dist::univar::gaussian(128.0, 32.0),
+                );
+            }
+        }
+    }
+}
+
+#[doc = "Sample from multiple correlated domain"]
+pub mod multivar {
+    use super::*;
+
+    pub use gibbs::Sampler as Gibbs;
+
+    #[doc = "Gibbs Sampling Algorithm"]
+    pub mod gibbs {
+        use super::*;
+        use std::sync::*;
+
+        pub struct Sampler<D: Domain, R: nd::Dimension + 'static, S: super::Sampler<D>> {
+            pd: std::marker::PhantomData<D>,
+            pub dim: R,
+            pub sampler: Arc<S>,
+        }
+        impl<D: Domain, R: nd::Dimension + 'static, S: super::Sampler<D>> Sampler<D, R, S> {
+            #[allow(unused)]
+            pub fn new(dim: R, sampler: S) -> Self {
+                Sampler {
+                    pd: std::marker::PhantomData,
+                    dim,
+                    sampler: Arc::new(sampler),
+                }
+            }
+        }
+        impl<D: Domain, R: nd::Dimension + 'static, S: super::Sampler<D>>
+            super::Sampler<nd::Array<D, R>> for Sampler<D, R, S>
+        {
+            type Iter<F: FnMut(&nd::Array<D, R>) -> f64> = impl Iterator<Item = nd::Array<D, R>>;
+            fn sample<F: FnMut(&nd::Array<D, R>) -> f64>(&self, mut pdf: F) -> Self::Iter<F> {
+                let mut init = D::random();
+                let mut state =
+                    nd::Array::from_shape_fn(self.dim.clone(), |_| init.next().unwrap());
+
+                let sampler = self.sampler.clone();
+                let (dim, ptr) = (state.raw_dim(), state.as_mut_ptr());
+
+                std::iter::repeat_with(move || unsafe {
+                    nd::ArrayViewMut::from_shape_ptr(dim.clone(), ptr).into_iter()
+                })
+                .flatten()
+                .map(move |old_value| {
+                    let new_value = sampler
+                        .sample(|value| {
+                            drop(std::mem::replace(old_value, value.clone()));
+                            pdf(&state)
+                        })
+                        .next()
+                        .unwrap();
+                    drop(std::mem::replace(old_value, new_value));
+                    state.clone()
+                })
+            }
+        }
+
+        #[cfg(test)]
+        mod tests {
+            use super::*;
+            use modular::*;
+
+            #[test]
+            fn gaussian() {
+                use sampler::Sampler;
+                super::test::sample(
+                    univar::Icdf::<Z<256>>::new().gibbs(nd::Dim([2])).burn(1000),
+                    dist::multivar::gaussian(
+                        na::vector![128.0, 128.0],
                         na::matrix![
-                            0.01, 0.006;
-                            0.006, 0.02;
+                            128.0, 32.0;
+                            32.0, 64.0;
                         ],
                     ),
                 );
@@ -152,50 +230,66 @@ pub mod multivar {
     }
 }
 
-#[doc = "Sampler adapters."]
+#[doc = "Sampler adapters"]
 pub mod adapter {
     use super::*;
 
-    pub use burn::Sampler as BurnIn;
-    pub use every::Sampler as Every;
+    pub use burn::Sampler as Burn;
+    pub use pick::Sampler as Pick;
 
-    #[doc = "Apply burn-in period."]
+    #[doc = "Discard non-equilibrium samples"]
     pub mod burn {
         use super::*;
 
-        pub struct Sampler<D, S: super::Sampler<D>>(std::marker::PhantomData<D>, S, usize);
-        impl<D, S: super::Sampler<D>> Sampler<D, S> {
+        pub struct Sampler<D: na::Scalar, S: super::Sampler<D>> {
+            pd: std::marker::PhantomData<D>,
+            pub sampler: S,
+            pub skip: usize,
+        }
+        impl<D: na::Scalar, S: super::Sampler<D>> Sampler<D, S> {
             #[allow(unused)]
             pub fn new(sampler: S, skip: usize) -> Self {
-                Sampler(std::marker::PhantomData, sampler, skip)
+                Sampler {
+                    pd: std::marker::PhantomData,
+                    sampler,
+                    skip,
+                }
             }
         }
-        impl<D: Scalar, S: super::Sampler<D>> super::Sampler<D> for Sampler<D, S> {
+        impl<D: na::Scalar, S: super::Sampler<D>> super::Sampler<D> for Sampler<D, S> {
             type Iter<F: FnMut(&D) -> f64> = impl Iterator<Item = D>;
             fn sample<F: FnMut(&D) -> f64>(&self, pdf: F) -> Self::Iter<F> {
-                self.1.sample(pdf).skip(self.2)
+                self.sampler.sample(pdf).skip(self.skip)
             }
         }
     }
 
-    #[doc = "Pick samples over intervals."]
-    pub mod every {
+    #[doc = "Pick samples over intervals"]
+    pub mod pick {
         use super::*;
 
-        pub struct Sampler<D, S: super::Sampler<D>>(std::marker::PhantomData<D>, S, usize);
-        impl<D, S: super::Sampler<D>> Sampler<D, S> {
+        pub struct Sampler<D: na::Scalar, S: super::Sampler<D>> {
+            pd: std::marker::PhantomData<D>,
+            pub sampler: S,
+            pub interval: usize,
+        }
+        impl<D: na::Scalar, S: super::Sampler<D>> Sampler<D, S> {
             #[allow(unused)]
             pub fn new(sampler: S, interval: usize) -> Self {
-                Sampler(std::marker::PhantomData, sampler, interval)
+                Sampler {
+                    pd: std::marker::PhantomData,
+                    sampler,
+                    interval,
+                }
             }
         }
-        impl<D: Scalar, S: super::Sampler<D>> super::Sampler<D> for Sampler<D, S> {
+        impl<D: na::Scalar, S: super::Sampler<D>> super::Sampler<D> for Sampler<D, S> {
             type Iter<F: FnMut(&D) -> f64> = impl Iterator<Item = D>;
             fn sample<F: FnMut(&D) -> f64>(&self, pdf: F) -> Self::Iter<F> {
-                let mut sampler = self.1.sample(pdf);
-                let count = self.2 - 1;
+                let mut sampler = self.sampler.sample(pdf);
+                let interval = self.interval;
                 std::iter::from_fn(move || {
-                    (0..count).for_each(|_| drop(sampler.next()));
+                    (1..interval).for_each(|_| drop(sampler.next()));
                     sampler.next()
                 })
             }
@@ -210,21 +304,20 @@ pub mod adapter {
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::fmt::Display;
 
-    pub fn sample<D: 'static + Display + Send>(sampler: impl Sampler<D>, pdf: impl Fn(&D) -> f64) {
+    pub fn sample<D: na::Scalar + Send>(sampler: impl Sampler<D>, pdf: impl Fn(&D) -> f64) {
         let (sender, receiver) = std::sync::mpsc::channel();
-
         std::thread::spawn(move || {
             use std::io::Write;
             let mut file = std::fs::OpenOptions::new()
                 .create(true)
                 .write(true)
-                .open("target/sample.txt")
+                .open("target/test.sample.txt")
                 .unwrap();
+
             loop {
                 let x = receiver.recv().unwrap();
-                writeln!(file, "{}", x).unwrap();
+                writeln!(file, "{:?}", x).unwrap();
             }
         });
 

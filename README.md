@@ -1,26 +1,29 @@
 # Probs
 
-Draw samples from certain domain with various sampling techniques. 
+Draw samples in any distribution with various sampling techniques. 
 
 
 
 ## Usage
 
-Construct a sampler of certain type 
+Construct a sampler with [builder pattern](https://doc.rust-lang.org/style/ownership/builders.html) 
 
 ```rust
+use randvar::modular::Z;
 use sampler::Sampler;
 fn test() {
-  sampler::univar::Icdf::new()
+  sampler::univar::Icdf::<Z<256>>::new()
+    .burn(100)  // burn-in period
+    .pick(3)    // pick 3 samples
 ```
 
 Sample a distribution with it 
 
 ```rust
-    .sample(distribution::univar::gaussian::<i8>(0.0, 32.0))
+    .sample(dist::univar::gaussian(128.0, 32.0))
 ```
 
-Use it like any `Iterator` as you would 
+Use it like any [Iterator](https://doc.rust-lang.org/book/ch13-02-iterators.html) as you would 
 
 ```rust
     .enumerate()
@@ -32,11 +35,11 @@ Use it like any `Iterator` as you would
 
 ## Distribution
 
-**ANY** customized/wired distribution can be sampled with provided samplers
+**ANY** customized/weird distribution can be sampled with provided samplers
 
 ```rust
-sampler::univar::Icdf::new()
-  .sample(|x: &u8| (x % 8) as f64)
+sampler::univar::Icdf::<Z<256>>::new()
+  .sample(|Z(x)| (x % 8) as f64)
 ```
 
 > Some sampler needs a burn-in period to achieve equilibrium
@@ -45,21 +48,20 @@ sampler::univar::Icdf::new()
 
 ## Multi-dimensional
 
-[Metropolis Sampler](https://en.wikipedia.org/wiki/Metropolis–Hastings_algorithm) is used to sample distribution from high dimension
+[Gibbs Sampler](https://wikipedia.org/wiki/Gibbs_sampling) is used to sample distribution from high dimension
 
 - Fix-dimensioned domain is represented with [ndarray](https://crates.io/crates/ndarray)
 
 ```rust
-sampler::multivar::Metropolis::<f64, nd::Ix1>::new(nd::Array::zeros([2]))
-    .sample(
-        distribution::multivar::gaussian(
-            na::vector![0.5, 0.5],
-            na::matrix![
-                    0.01, 0.006;
-                    0.006, 0.02;
-            ],
-        ),
-    )
-    .burn(1000)  // burn-in
+univar::Icdf::<Z<256>>::new()
+    .gibbs(nd::Dim([2]))
+    .burn(1000)
+    .sample(dist::multivar::gaussian(
+        na::vector![128.0, 128.0], // μ
+        na::matrix![               // σ
+            128.0, 32.0;
+            32.0, 64.0;
+        ],
+    ))
 ```
 

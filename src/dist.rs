@@ -20,13 +20,13 @@ pub mod multivar {
     }
 
     pub fn gaussian<D: num::ToPrimitive, const R: usize>(
-        mu: na::SVector<f64, R>,
-        sigma: na::SMatrix<f64, R, R>,
+        μ: na::SVector<f64, R>,
+        σ: na::SMatrix<f64, R, R>,
     ) -> impl Fn(&nd::Array1<D>) -> f64 {
-        let sigma = sigma.try_inverse().unwrap();
+        let σ = σ.try_inverse().unwrap();
         move |xs| {
-            let xs = ns::ToNalgebra::into_nalgebra(xs.map(|x| x.to_f64().unwrap())) - mu;
-            (-(sigma * xs).dot(&xs) / 2.0).exp()
+            let xs = ns::ToNalgebra::into_nalgebra(xs.map(|x| x.to_f64().unwrap())) - μ;
+            (-(σ * xs).dot(&xs) / 2.0).exp()
         }
     }
 }

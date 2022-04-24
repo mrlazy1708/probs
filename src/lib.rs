@@ -8,9 +8,9 @@ extern crate nalgebra as na;
 extern crate ndarray as nd;
 extern crate nshare as ns;
 
-pub mod domain;
+pub mod dist;
+pub mod randvar;
 pub mod sampler;
-pub mod distribution;
 
-pub use domain::*;
+pub use randvar::*;
 pub use sampler::*;
